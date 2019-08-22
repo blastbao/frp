@@ -192,6 +192,8 @@ func runClient(cfgFilePath string) (err error) {
 
 func startService(pxyCfgs map[string]config.ProxyConf, visitorCfgs map[string]config.VisitorConf) (err error) {
 	log.InitLog(g.GlbClientCfg.LogWay, g.GlbClientCfg.LogFile, g.GlbClientCfg.LogLevel, g.GlbClientCfg.LogMaxDays)
+
+
 	if g.GlbClientCfg.DnsServer != "" {
 		s := g.GlbClientCfg.DnsServer
 		if !strings.Contains(s, ":") {
@@ -205,6 +207,8 @@ func startService(pxyCfgs map[string]config.ProxyConf, visitorCfgs map[string]co
 			},
 		}
 	}
+
+
 	svr, errRet := client.NewService(pxyCfgs, visitorCfgs)
 	if errRet != nil {
 		err = errRet

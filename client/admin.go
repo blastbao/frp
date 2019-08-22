@@ -36,6 +36,8 @@ func (svr *Service) RunAdminServer(addr string, port int) (err error) {
 	// url router
 	router := mux.NewRouter()
 
+
+	// 添加鉴权中间件
 	user, passwd := g.GlbClientCfg.AdminUser, g.GlbClientCfg.AdminPwd
 	router.Use(frpNet.NewHttpAuthMiddleware(user, passwd).Middleware)
 

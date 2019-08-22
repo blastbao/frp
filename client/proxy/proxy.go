@@ -52,9 +52,11 @@ type Proxy interface {
 }
 
 func NewProxy(pxyConf config.ProxyConf) (pxy Proxy) {
+
 	baseProxy := BaseProxy{
 		Logger: log.NewPrefixLogger(pxyConf.GetBaseInfo().ProxyName),
 	}
+
 	switch cfg := pxyConf.(type) {
 	case *config.TcpProxyConf:
 		pxy = &TcpProxy{
@@ -96,6 +98,7 @@ type BaseProxy struct {
 	log.Logger
 }
 
+
 // TCP
 type TcpProxy struct {
 	*BaseProxy
@@ -121,9 +124,20 @@ func (pxy *TcpProxy) Close() {
 }
 
 func (pxy *TcpProxy) InWorkConn(conn frpNet.Conn, m *msg.StartWorkConn) {
-	HandleTcpWorkConnection(&pxy.cfg.LocalSvrConf, pxy.proxyPlugin, &pxy.cfg.BaseProxyConf, conn,
-		[]byte(g.GlbClientCfg.Token), m)
+
+
+	HandleTcpWorkConnection(
+		&pxy.cfg.LocalSvrConf,
+		pxy.proxyPlugin,
+		&pxy.cfg.BaseProxyConf,
+		conn,
+		[]byte(g.GlbClientCfg.Token),
+		m,
+	)
 }
+
+
+
 
 // HTTP
 type HttpProxy struct {
@@ -150,8 +164,14 @@ func (pxy *HttpProxy) Close() {
 }
 
 func (pxy *HttpProxy) InWorkConn(conn frpNet.Conn, m *msg.StartWorkConn) {
-	HandleTcpWorkConnection(&pxy.cfg.LocalSvrConf, pxy.proxyPlugin, &pxy.cfg.BaseProxyConf, conn,
-		[]byte(g.GlbClientCfg.Token), m)
+	HandleTcpWorkConnection(
+		&pxy.cfg.LocalSvrConf,
+		pxy.proxyPlugin,
+		&pxy.cfg.BaseProxyConf,
+		conn,
+		[]byte(g.GlbClientCfg.Token),
+		m,
+	)
 }
 
 // HTTPS
@@ -178,10 +198,26 @@ func (pxy *HttpsProxy) Close() {
 	}
 }
 
+
+
+
+
 func (pxy *HttpsProxy) InWorkConn(conn frpNet.Conn, m *msg.StartWorkConn) {
-	HandleTcpWorkConnection(&pxy.cfg.LocalSvrConf, pxy.proxyPlugin, &pxy.cfg.BaseProxyConf, conn,
-		[]byte(g.GlbClientCfg.Token), m)
+
+
+	HandleTcpWorkConnection(
+		&pxy.cfg.LocalSvrConf,
+		pxy.proxyPlugin,
+		&pxy.cfg.BaseProxyConf,
+		conn,
+		[]byte(g.GlbClientCfg.Token),
+		m,
+	)
+
+
 }
+
+
 
 // STCP
 type StcpProxy struct {
@@ -208,8 +244,7 @@ func (pxy *StcpProxy) Close() {
 }
 
 func (pxy *StcpProxy) InWorkConn(conn frpNet.Conn, m *msg.StartWorkConn) {
-	HandleTcpWorkConnection(&pxy.cfg.LocalSvrConf, pxy.proxyPlugin, &pxy.cfg.BaseProxyConf, conn,
-		[]byte(g.GlbClientCfg.Token), m)
+	HandleTcpWorkConnection(&pxy.cfg.LocalSvrConf, pxy.proxyPlugin, &pxy.cfg.BaseProxyConf, conn, []byte(g.GlbClientCfg.Token), m)
 }
 
 // XTCP
@@ -353,8 +388,7 @@ func (pxy *XtcpProxy) InWorkConn(conn frpNet.Conn, m *msg.StartWorkConn) {
 		return
 	}
 
-	HandleTcpWorkConnection(&pxy.cfg.LocalSvrConf, pxy.proxyPlugin, &pxy.cfg.BaseProxyConf,
-		frpNet.WrapConn(muxConn), []byte(pxy.cfg.Sk), m)
+	HandleTcpWorkConnection(&pxy.cfg.LocalSvrConf, pxy.proxyPlugin, &pxy.cfg.BaseProxyConf, frpNet.WrapConn(muxConn), []byte(pxy.cfg.Sk), m)
 }
 
 func (pxy *XtcpProxy) sendDetectMsg(addr string, port int, laddr *net.UDPAddr, content []byte) (err error) {
@@ -481,16 +515,27 @@ func (pxy *UdpProxy) InWorkConn(conn frpNet.Conn, m *msg.StartWorkConn) {
 	udp.Forwarder(pxy.localAddr, pxy.readCh, pxy.sendCh)
 }
 
+
+
 // Common handler for tcp work connections.
-func HandleTcpWorkConnection(localInfo *config.LocalSvrConf, proxyPlugin plugin.Plugin,
-	baseInfo *config.BaseProxyConf, workConn frpNet.Conn, encKey []byte, m *msg.StartWorkConn) {
+func HandleTcpWorkConnection(
+							localInfo *config.LocalSvrConf,     // client 本地配置
+							proxyPlugin plugin.Plugin,          // 插件
+							baseInfo *config.BaseProxyConf,     //
+							workConn frpNet.Conn,
+							encKey []byte,
+							m *msg.StartWorkConn) {
+
 
 	var (
 		remote io.ReadWriteCloser
 		err    error
 	)
+
+	// 临时变量
 	remote = workConn
 
+	// 是否需要加密？
 	if baseInfo.UseEncryption {
 		remote, err = frpIo.WithEncryption(remote, encKey)
 		if err != nil {
@@ -499,17 +544,35 @@ func HandleTcpWorkConnection(localInfo *config.LocalSvrConf, proxyPlugin plugin.
 			return
 		}
 	}
+
+	// 是否需要压缩？
 	if baseInfo.UseCompression {
 		remote = frpIo.WithCompression(remote)
 	}
 
 	// check if we need to send proxy protocol info
 	var extraInfo []byte
+
+
+	// 代理协议 PROXY Protocol :
+	// 代理协议是 haproxy 的作者 Willy Tarreau 于2010年开发和设计的一个 Internet 协议，
+	// 通过为 tcp 添加一个很小的头信息，来方便的传递客户端信息（协议栈、源IP、目的IP、源端口、目的端口等)，
+	// 在网络情况复杂又需要获取客户IP时非常有用。
+
+
+	// 是否使用代理协议？
 	if baseInfo.ProxyProtocolVersion != "" {
+
+
+		// 如果
 		if m.SrcAddr != "" && m.SrcPort != 0 {
+
+			// 默认建立连接的对象为本机的被代理服务，所以设为本地回环地址
 			if m.DstAddr == "" {
 				m.DstAddr = "127.0.0.1"
 			}
+
+			// 构造代理协议的 header
 			h := &pp.Header{
 				Command:            pp.PROXY,
 				SourceAddress:      net.ParseIP(m.SrcAddr),
@@ -518,31 +581,39 @@ func HandleTcpWorkConnection(localInfo *config.LocalSvrConf, proxyPlugin plugin.
 				DestinationPort:    m.DstPort,
 			}
 
+			// 设置代理协议类型
 			if h.SourceAddress.To16() == nil {
 				h.TransportProtocol = pp.TCPv4
 			} else {
 				h.TransportProtocol = pp.TCPv6
 			}
 
+			// 设置代理协议版本号
 			if baseInfo.ProxyProtocolVersion == "v1" {
 				h.Version = 1
 			} else if baseInfo.ProxyProtocolVersion == "v2" {
 				h.Version = 2
 			}
 
+			// 把 header 序列化为字节数组 extraInfo
 			buf := bytes.NewBuffer(nil)
 			h.WriteTo(buf)
 			extraInfo = buf.Bytes()
 		}
+
 	}
 
+	// 是否存在插件？
 	if proxyPlugin != nil {
 		// if plugin is set, let plugin handle connections first
 		workConn.Debug("handle by plugin: %s", proxyPlugin.Name())
 		proxyPlugin.Handle(remote, workConn, extraInfo)
 		workConn.Debug("handle by plugin finished")
 		return
+
 	} else {
+
+		// 与本地被代理服务(SSH、WEB）建立 tcp 连接 localConn
 		localConn, err := frpNet.ConnectServer("tcp", fmt.Sprintf("%s:%d", localInfo.LocalIp, localInfo.LocalPort))
 		if err != nil {
 			workConn.Close()
@@ -550,14 +621,25 @@ func HandleTcpWorkConnection(localInfo *config.LocalSvrConf, proxyPlugin plugin.
 			return
 		}
 
-		workConn.Debug("join connections, localConn(l[%s] r[%s]) workConn(l[%s] r[%s])", localConn.LocalAddr().String(),
-			localConn.RemoteAddr().String(), workConn.LocalAddr().String(), workConn.RemoteAddr().String())
+		workConn.Debug("join connections, localConn(l[%s] r[%s]) workConn(l[%s] r[%s])",
+						localConn.LocalAddr().String(),
+						localConn.RemoteAddr().String(),
+						workConn.LocalAddr().String(),
+						workConn.RemoteAddr().String())
 
+
+		// 如果使用代理协议，则需要先发送 header 头信息给本地被代理的服务
 		if len(extraInfo) > 0 {
 			localConn.Write(extraInfo)
 		}
 
+		// Join() 函数实现 workConn 和 localConn 两个连接之间的双向数据交换。
+		// 如图所示：user <-> server <-workConn—> client <-localConn-> localSSH。
 		frpIo.Join(localConn, remote)
+
+
 		workConn.Debug("join connections closed")
+
+
 	}
 }

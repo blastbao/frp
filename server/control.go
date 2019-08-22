@@ -78,7 +78,12 @@ func (cm *ControlManager) GetById(runId string) (ctl *Control, ok bool) {
 	return
 }
 
+
+
+// Server 的控制 control
 type Control struct {
+
+
 	// all resource managers and controllers
 	rc *controller.ResourceController
 
@@ -88,16 +93,22 @@ type Control struct {
 	// stats collector to store stats info of clients and proxies
 	statsCollector stats.Collector
 
+
+
 	// login message
+	// 登录消息
 	loginMsg *msg.Login
 
 	// control connection
+	// 网络连接
 	conn net.Conn
 
 	// put a message in this channel to send it over control connection to client
+	// 发送队列，发消息给 client
 	sendCh chan (msg.Message)
 
 	// read from this channel to get the next message sent by client
+	// 接收队列，读取 client 发来的消息
 	readCh chan (msg.Message)
 
 	// work connections
@@ -131,8 +142,11 @@ type Control struct {
 	mu sync.RWMutex
 }
 
-func NewControl(rc *controller.ResourceController, pxyManager *proxy.ProxyManager,
-	statsCollector stats.Collector, ctlConn net.Conn, loginMsg *msg.Login) *Control {
+func NewControl(rc *controller.ResourceController,
+				pxyManager *proxy.ProxyManager,
+				statsCollector stats.Collector,
+				ctlConn net.Conn,
+				loginMsg *msg.Login) *Control {
 
 	return &Control{
 		rc:              rc,
@@ -140,15 +154,15 @@ func NewControl(rc *controller.ResourceController, pxyManager *proxy.ProxyManage
 		statsCollector:  statsCollector,
 		conn:            ctlConn,
 		loginMsg:        loginMsg,
-		sendCh:          make(chan msg.Message, 10),
-		readCh:          make(chan msg.Message, 10),
-		workConnCh:      make(chan net.Conn, loginMsg.PoolCount+10),
-		proxies:         make(map[string]proxy.Proxy),
-		poolCount:       loginMsg.PoolCount,
+		sendCh:          make(chan msg.Message, 10),   	// 发送长度10
+		readCh:          make(chan msg.Message, 10),	// 读长度 10
+		workConnCh:      make(chan net.Conn, loginMsg.PoolCount+10),	//workconnection 通道,
+		proxies:         make(map[string]proxy.Proxy), 	// 代理数组
+		poolCount:       loginMsg.PoolCount, 			// pool 数
 		portsUsedNum:    0,
 		lastPing:        time.Now(),
-		runId:           loginMsg.RunId,
-		status:          consts.Working,
+		runId:           loginMsg.RunId, 				// 拿到loginMsg中的runid
+		status:          consts.Working, 				// 状态
 		readerShutdown:  shutdown.New(),
 		writerShutdown:  shutdown.New(),
 		managerShutdown: shutdown.New(),
@@ -158,21 +172,38 @@ func NewControl(rc *controller.ResourceController, pxyManager *proxy.ProxyManage
 
 // Start send a login success message to client and start working.
 func (ctl *Control) Start() {
+
+
+	// 向客户端发送一个 LoginResp 的消息，告知 client 成功
 	loginRespMsg := &msg.LoginResp{
 		Version:       version.Full(),
 		RunId:         ctl.runId,
 		ServerUdpPort: g.GlbServerCfg.BindUdpPort,
 		Error:         "",
 	}
+
+	// 数据写入到 connection
 	msg.WriteMsg(ctl.conn, loginRespMsg)
 
+
+	// 从 ctl.sendCh 中读取消息并发送给客户端
 	go ctl.writer()
+
+
+	// 与客户端开启多个连接
 	for i := 0; i < ctl.poolCount; i++ {
 		ctl.sendCh <- &msg.ReqWorkConn{}
 	}
 
+
+	// 1. 心跳检查与发起重连
+	// 2. 从 ctl.readCh 中读取消息
 	go ctl.manager()
+
+	// 将从 socket 中读取消息并解析，然后发送到 ctl.readCh
 	go ctl.reader()
+
+	//
 	go ctl.stoper()
 }
 
@@ -193,11 +224,21 @@ func (ctl *Control) RegisterWorkConn(conn net.Conn) {
 	}
 }
 
+
+
+
 // When frps get one user connection, we get one work connection from the pool and return it.
-// If no workConn available in the pool, send message to frpc to get one or more
-// and wait until it is available.
+// If no workConn available in the pool, send message to frpc to get one or more and wait until it is available.
 // return an error if wait timeout
 func (ctl *Control) GetWorkConn() (workConn net.Conn, err error) {
+
+
+	// 这块设计思路是酱紫：因为 client 并不是一个服务，所以 server 不能主动和 client 建立连接，
+	// 但是当有新的公网 user 连接请求到达时，为能支持请求转发，需要一条独立的 client <-> server 连接，
+	// 如果此时 client 和 server 间可用连接不足，则 server 主动通过控制信道通知 client 建立新的
+	// 连接到 server 上，这样这个新链接就可以被 server 分配给新的 user 来使用。
+
+
 	defer func() {
 		if err := recover(); err != nil {
 			ctl.conn.Error("panic error: %v", err)
@@ -206,16 +247,22 @@ func (ctl *Control) GetWorkConn() (workConn net.Conn, err error) {
 	}()
 
 	var ok bool
-	// get a work connection from the pool
 	select {
+
+	// get a work connection from the pool
+	// 从 workConnCh 中取出一个 workConn
 	case workConn, ok = <-ctl.workConnCh:
 		if !ok {
 			err = frpErr.ErrCtlClosed
 			return
 		}
 		ctl.conn.Debug("get work connection from pool")
+
+	// no work connections available in the poll, send message to frpc to get more
+	// 若无可用连接，就告知 client 创建新连接来使用
 	default:
-		// no work connections available in the poll, send message to frpc to get more
+
+		// 1. 发消息给 client 请求新 workConn
 		err = errors.PanicToError(func() {
 			ctl.sendCh <- &msg.ReqWorkConn{}
 		})
@@ -224,6 +271,7 @@ func (ctl *Control) GetWorkConn() (workConn net.Conn, err error) {
 			return
 		}
 
+		// 2. 等待可用 workConn, 带超时
 		select {
 		case workConn, ok = <-ctl.workConnCh:
 			if !ok {
@@ -231,7 +279,6 @@ func (ctl *Control) GetWorkConn() (workConn net.Conn, err error) {
 				ctl.conn.Warn("no work connections avaiable, %v", err)
 				return
 			}
-
 		case <-time.After(time.Duration(g.GlbServerCfg.UserConnTimeout) * time.Second):
 			err = fmt.Errorf("timeout trying to get work connection")
 			ctl.conn.Warn("%v", err)
@@ -239,10 +286,13 @@ func (ctl *Control) GetWorkConn() (workConn net.Conn, err error) {
 		}
 	}
 
+
 	// When we get a work connection from pool, replace it with a new one.
+	// 如果我们从 connPool 中取出了一个连接，则通知 client 补充一个新连接
 	errors.PanicToError(func() {
 		ctl.sendCh <- &msg.ReqWorkConn{}
 	})
+
 	return
 }
 
@@ -253,22 +303,27 @@ func (ctl *Control) Replaced(newCtl *Control) {
 }
 
 func (ctl *Control) writer() {
+
 	defer func() {
+		// panic 捕获
 		if err := recover(); err != nil {
-			ctl.conn.Error("panic error: %v", err)
-			ctl.conn.Error(string(debug.Stack()))
+			ctl.conn.Error("panic error: %v", err) //记录日志
+			ctl.conn.Error(string(debug.Stack()))  //记录日志
 		}
 	}()
 
 	defer ctl.allShutdown.Start()
 	defer ctl.writerShutdown.Done()
 
+	// 构造加密写
 	encWriter, err := crypto.NewWriter(ctl.conn, []byte(g.GlbServerCfg.Token))
 	if err != nil {
 		ctl.conn.Error("crypto new writer error: %v", err)
 		ctl.allShutdown.Start()
 		return
 	}
+
+	// 不断从 ctl.sendCh 读取消息，然后以加密方式写入到同 client 的连接 conn 中，直到 ctl.sendCh 被关闭。
 	for {
 		if m, ok := <-ctl.sendCh; !ok {
 			ctl.conn.Info("control writer is closing")
@@ -282,6 +337,7 @@ func (ctl *Control) writer() {
 	}
 }
 
+
 func (ctl *Control) reader() {
 	defer func() {
 		if err := recover(); err != nil {
@@ -290,12 +346,19 @@ func (ctl *Control) reader() {
 		}
 	}()
 
+	// ctrl 的清理工作
 	defer ctl.allShutdown.Start()
+	// ctrl 的清理完成
 	defer ctl.readerShutdown.Done()
 
+	// 构造解密读
 	encReader := crypto.NewReader(ctl.conn, []byte(g.GlbServerCfg.Token))
+
+	// 不断从 client 的连接 conn 中读取数据，解析成 msg 后写入到 ctl.readCh 中，直到 conn 被关闭。
 	for {
 		if m, err := msg.ReadMsg(encReader); err != nil {
+
+			// EOF 表示 ctl.conn 关闭
 			if err == io.EOF {
 				ctl.conn.Debug("control connection closed")
 				return
@@ -305,10 +368,13 @@ func (ctl *Control) reader() {
 				return
 			}
 		} else {
+			// 将 msg 放到 readCh
 			ctl.readCh <- m
 		}
 	}
 }
+
+
 
 func (ctl *Control) stoper() {
 	defer func() {
@@ -352,6 +418,8 @@ func (ctl *Control) stoper() {
 	ctl.statsCollector.Mark(stats.TypeCloseClient, &stats.CloseClientPayload{})
 }
 
+
+
 // block until Control closed
 func (ctl *Control) WaitClosed() {
 	ctl.allShutdown.WaitDone()
@@ -373,39 +441,60 @@ func (ctl *Control) manager() {
 
 	for {
 		select {
+
+		// 心跳检测：检查 client 是否在正常发送 ping 消息
 		case <-heartbeat.C:
+			// 一个心跳窗口内没有收到 client 发来的 ping，则认为它已经挂了，报错。
 			if time.Since(ctl.lastPing) > time.Duration(g.GlbServerCfg.HeartBeatTimeout)*time.Second {
 				ctl.conn.Warn("heartbeat timeout")
 				return
 			}
+
+		// 读取 client 发送的消息
 		case rawMsg, ok := <-ctl.readCh:
 			if !ok {
 				return
 			}
 
 			switch m := rawMsg.(type) {
+
+			// NewProxy 消息: 创建一个新 Proxy
 			case *msg.NewProxy:
-				// register proxy in this control
-				remoteAddr, err := ctl.RegisterProxy(m)
+
+				// 注册新 proxy 到 ctl 上
+				remoteAddr, err := ctl.RegisterProxy(m) // register proxy in this control
+
+				// 构造回复消息
 				resp := &msg.NewProxyResp{
 					ProxyName: m.ProxyName,
 				}
+
+				// 创建成功 or 失败
 				if err != nil {
+					// 设置错误信息
 					resp.Error = err.Error()
 					ctl.conn.Warn("new proxy [%s] error: %v", m.ProxyName, err)
 				} else {
+					// 设置
 					resp.RemoteAddr = remoteAddr
 					ctl.conn.Info("new proxy [%s] success", m.ProxyName)
-					ctl.statsCollector.Mark(stats.TypeNewProxy, &stats.NewProxyPayload{
-						Name:      m.ProxyName,
-						ProxyType: m.ProxyType,
-					})
+					ctl.statsCollector.Mark(
+						stats.TypeNewProxy,
+						&stats.NewProxyPayload{
+							Name:      m.ProxyName,
+							ProxyType: m.ProxyType,
+						},
+					)
 				}
+
+				// 将回复消息 NewProxyResp 放到回复队列中，等待发给 client
 				ctl.sendCh <- resp
 			case *msg.CloseProxy:
+				// 关闭 proxy
 				ctl.CloseProxy(m)
 				ctl.conn.Info("close proxy [%s] success", m.ProxyName)
 			case *msg.Ping:
+				// 收到 client 心跳，更新心跳接收时间，然后回复心跳响应包
 				ctl.lastPing = time.Now()
 				ctl.conn.Debug("receive heartbeat")
 				ctl.sendCh <- &msg.Pong{}
@@ -414,31 +503,53 @@ func (ctl *Control) manager() {
 	}
 }
 
+
+
+
 func (ctl *Control) RegisterProxy(pxyMsg *msg.NewProxy) (remoteAddr string, err error) {
 	var pxyConf config.ProxyConf
+
 	// Load configures from NewProxy message and check.
+	// 根据 pxyMsg 消息来生成特定协议的 pxyConf 配置结构体对象
 	pxyConf, err = config.NewProxyConfFromMsg(pxyMsg)
 	if err != nil {
 		return
 	}
 
 	// NewProxy will return a interface Proxy.
-	// In fact it create different proxies by different proxy type, we just call run() here.
+	// In fact it create different proxies by different proxy type,
+	// we just call run() here.
+
+
+
+	// 生成一个 Proxy
 	pxy, err := proxy.NewProxy(ctl.runId, ctl.rc, ctl.statsCollector, ctl.poolCount, ctl.GetWorkConn, pxyConf)
 	if err != nil {
 		return remoteAddr, err
 	}
 
+
+
 	// Check ports used number in each client
+	//
 	if g.GlbServerCfg.MaxPortsPerClient > 0 {
+
 		ctl.mu.Lock()
+
+
+
+
 		if ctl.portsUsedNum+pxy.GetUsedPortsNum() > int(g.GlbServerCfg.MaxPortsPerClient) {
 			ctl.mu.Unlock()
 			err = fmt.Errorf("exceed the max_ports_per_client")
 			return
 		}
+
 		ctl.portsUsedNum = ctl.portsUsedNum + pxy.GetUsedPortsNum()
+
+
 		ctl.mu.Unlock()
+
 
 		defer func() {
 			if err != nil {
@@ -449,24 +560,32 @@ func (ctl *Control) RegisterProxy(pxyMsg *msg.NewProxy) (remoteAddr string, err 
 		}()
 	}
 
+
+	// 运行 proxy
 	remoteAddr, err = pxy.Run()
 	if err != nil {
 		return
 	}
+
+
 	defer func() {
 		if err != nil {
 			pxy.Close()
 		}
 	}()
 
+	// 保存 pxyName => pxy 的映射到 ctl.pxyManager 中
 	err = ctl.pxyManager.Add(pxyMsg.ProxyName, pxy)
 	if err != nil {
 		return
 	}
 
+	// 加入到 ctl.proxies 中
 	ctl.mu.Lock()
 	ctl.proxies[pxy.GetName()] = pxy
 	ctl.mu.Unlock()
+
+
 	return
 }
 

@@ -59,7 +59,9 @@ func NewHttpAuthMiddleware(user, passwd string) *HttpAuthMiddleware {
 
 func (authMid *HttpAuthMiddleware) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 读取 "Authorization" 头，获取鉴权信息
 		reqUser, reqPasswd, hasAuth := r.BasicAuth()
+		// 如果鉴权信息匹配，则正常响应，否则返回 "Restricted"
 		if (authMid.user == "" && authMid.passwd == "") ||
 			(hasAuth && reqUser == authMid.user && reqPasswd == authMid.passwd) {
 			next.ServeHTTP(w, r)

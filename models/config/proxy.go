@@ -62,17 +62,27 @@ type ProxyConf interface {
 	Compare(conf ProxyConf) bool
 }
 
+
+// 根据 NewProxy 消息来生成 ProxyConf 配置信息
 func NewProxyConfFromMsg(pMsg *msg.NewProxy) (cfg ProxyConf, err error) {
+
+
+	// 代理类型: tcp/udp/http/https/stcp/xtcp
 	if pMsg.ProxyType == "" {
 		pMsg.ProxyType = consts.TcpProxy
 	}
 
+	// 不同的代理类型，对应不同的配置结构体 cfg
 	cfg = NewConfByType(pMsg.ProxyType)
 	if cfg == nil {
 		err = fmt.Errorf("proxy [%s] type [%s] error", pMsg.ProxyName, pMsg.ProxyType)
 		return
 	}
+
+	// 不同的配置结构体，有不同的序列化和反序列化方式，这里是从 pMsg 中反序列化成 cfg ProxyConf 结构体对象
 	cfg.UnmarshalFromMsg(pMsg)
+
+	// ???
 	err = cfg.CheckForSvr()
 	return
 }

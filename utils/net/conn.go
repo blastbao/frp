@@ -97,14 +97,15 @@ func (conn *WrapReadWriteCloserConn) SetWriteDeadline(t time.Time) error {
 	return &net.OpError{Op: "set", Net: "wrap", Source: nil, Addr: nil, Err: errors.New("deadline not supported")}
 }
 
+
 type CloseNotifyConn struct {
 	net.Conn
 	log.Logger
 
 	// 1 means closed
-	closeFlag int32
+	closeFlag int32  	// 关闭标识
 
-	closeFn func()
+	closeFn func() 		// 断连回调
 }
 
 // closeFn will be only called once
@@ -117,11 +118,13 @@ func WrapCloseNotifyConn(c net.Conn, closeFn func()) Conn {
 }
 
 func (cc *CloseNotifyConn) Close() (err error) {
+	// 设置关闭标识
 	pflag := atomic.SwapInt32(&cc.closeFlag, 1)
+
 	if pflag == 0 {
 		err = cc.Close()
 		if cc.closeFn != nil {
-			cc.closeFn()
+			cc.closeFn() // 回调函数
 		}
 	}
 	return
@@ -166,6 +169,12 @@ func (statsConn *StatsConn) Close() (err error) {
 	return
 }
 
+
+
+
+
+
+
 func ConnectServer(protocol string, addr string) (c Conn, err error) {
 	switch protocol {
 	case "tcp":
@@ -191,7 +200,13 @@ func ConnectServer(protocol string, addr string) (c Conn, err error) {
 	}
 }
 
+
+
+
+
 func ConnectServerByProxy(proxyUrl string, protocol string, addr string) (c Conn, err error) {
+
+
 	switch protocol {
 	case "tcp":
 		var conn net.Conn
@@ -209,7 +224,13 @@ func ConnectServerByProxy(proxyUrl string, protocol string, addr string) (c Conn
 	}
 }
 
+
+// 1. 协议: tcp, kcp, websocket
+// 2.
+
 func ConnectServerByProxyWithTLS(proxyUrl string, protocol string, addr string, tlsConfig *tls.Config) (c Conn, err error) {
+
+
 	c, err = ConnectServerByProxy(proxyUrl, protocol, addr)
 	if err != nil {
 		return

@@ -89,10 +89,14 @@ type Service struct {
 }
 
 func NewService() (svr *Service, err error) {
+
+
 	cfg := &g.GlbServerCfg.ServerCommonConf
+
+
 	svr = &Service{
-		ctlManager: NewControlManager(),
-		pxyManager: proxy.NewProxyManager(),
+		ctlManager: NewControlManager(),      // 新建ctl-Manager
+		pxyManager: proxy.NewProxyManager(),  // 新建Proxy-Manager
 		rc: &controller.ResourceController{
 			VisitorManager: controller.NewVisitorManager(),
 			TcpPortManager: ports.NewPortManager("tcp", cfg.ProxyBindAddr, cfg.AllowPorts),
@@ -108,7 +112,9 @@ func NewService() (svr *Service, err error) {
 	// Init HTTP group controller
 	svr.rc.HTTPGroupCtl = group.NewHTTPGroupController(svr.httpVhostRouter)
 
+
 	// Init assets
+	// 资源文件加载
 	err = assets.Load(cfg.AssetsDir)
 	if err != nil {
 		err = fmt.Errorf("Load assets error: %v", err)
@@ -164,9 +170,13 @@ func NewService() (svr *Service, err error) {
 
 	// Create http vhost muxer.
 	if cfg.VhostHttpPort > 0 {
-		rp := vhost.NewHttpReverseProxy(vhost.HttpReverseProxyOptions{
-			ResponseHeaderTimeoutS: cfg.VhostHttpTimeout,
-		}, svr.httpVhostRouter)
+
+		rp := vhost.NewHttpReverseProxy(
+			vhost.HttpReverseProxyOptions{
+				ResponseHeaderTimeoutS: cfg.VhostHttpTimeout,
+			},
+			svr.httpVhostRouter,
+		)
 		svr.rc.HttpReverseProxy = rp
 
 		address := fmt.Sprintf("%s:%d", cfg.ProxyBindAddr, cfg.VhostHttpPort)
@@ -244,6 +254,12 @@ func NewService() (svr *Service, err error) {
 	return
 }
 
+
+
+
+
+
+
 func (svr *Service) Run() {
 	if svr.rc.NatHoleController != nil {
 		go svr.rc.NatHoleController.Run()
@@ -255,12 +271,16 @@ func (svr *Service) Run() {
 	go svr.HandleListener(svr.websocketListener)
 	go svr.HandleListener(svr.tlsListener)
 
+	// tcp
 	svr.HandleListener(svr.listener)
 }
 
 func (svr *Service) HandleListener(l frpNet.Listener) {
+
 	// Listen for incoming connections from client.
 	for {
+
+		// 接受 client 的连接请求
 		c, err := l.Accept()
 		if err != nil {
 			log.Warn("Listener for incoming connections from client closed")
@@ -268,7 +288,11 @@ func (svr *Service) HandleListener(l frpNet.Listener) {
 		}
 
 		log.Trace("start check TLS connection...")
+
+		// 保存原始连接
 		originConn := c
+
+		// 封装 TLS
 		c, err = frpNet.CheckAndEnableTLSServerConnWithTimeout(c, svr.tlsConfig, connReadTimeout)
 		if err != nil {
 			log.Warn("CheckAndEnableTLSServerConnWithTimeout error: %v", err)
@@ -277,53 +301,86 @@ func (svr *Service) HandleListener(l frpNet.Listener) {
 		}
 		log.Trace("success check TLS connection")
 
+
+		// 每来一个新的连接，就起一个 goroutine 去处理
+
 		// Start a new goroutine for dealing connections.
 		go func(frpConn frpNet.Conn) {
+
+
+			//
 			dealFn := func(conn frpNet.Conn) {
+
+				// 定义消息结构体，用来接收 frpc 发来的消息
 				var rawMsg msg.Message
-				conn.SetReadDeadline(time.Now().Add(connReadTimeout))
+
+				// 设置读取消息的超时
+				_ = conn.SetReadDeadline(time.Now().Add(connReadTimeout))
+
+				// 读取 frpc 发来的消息
 				if rawMsg, err = msg.ReadMsg(conn); err != nil {
 					log.Trace("Failed to read message: %v", err)
 					conn.Close()
 					return
 				}
-				conn.SetReadDeadline(time.Time{})
 
+				// 取消读取超时设置，也即不设超时
+				_ = conn.SetReadDeadline(time.Time{})
+
+
+				//（重要）判断frpc 发来的消息类型
 				switch m := rawMsg.(type) {
+
+				// Login 就是新的客户端连上去之后进行注册
 				case *msg.Login:
 					err = svr.RegisterControl(conn, m)
 					// If login failed, send error message there.
 					// Otherwise send success message in control's work goroutine.
 					if err != nil {
 						conn.Warn("%v", err)
-						msg.WriteMsg(conn, &msg.LoginResp{
+						_ = msg.WriteMsg(conn, &msg.LoginResp{
 							Version: version.Full(),
 							Error:   err.Error(),
 						})
 						conn.Close()
 					}
+
+
+				// NewWorkConn 用于转发流量的
 				case *msg.NewWorkConn:
+
 					svr.RegisterWorkConn(conn, m)
+
+
+				// NewVisitorConn 是用于 stcp, 也就是端对端加密通信的
 				case *msg.NewVisitorConn:
+
 					if err = svr.RegisterVisitorConn(conn, m); err != nil {
+
 						conn.Warn("%v", err)
-						msg.WriteMsg(conn, &msg.NewVisitorConnResp{
+						_ = msg.WriteMsg(conn, &msg.NewVisitorConnResp{
 							ProxyName: m.ProxyName,
 							Error:     err.Error(),
 						})
 						conn.Close()
+
 					} else {
-						msg.WriteMsg(conn, &msg.NewVisitorConnResp{
+
+						_ = msg.WriteMsg(conn, &msg.NewVisitorConnResp{
 							ProxyName: m.ProxyName,
 							Error:     "",
 						})
+
 					}
+
 				default:
 					log.Warn("Error message type for the new connection [%s]", conn.RemoteAddr().String())
-					conn.Close()
+					_ = conn.Close()
 				}
 			}
 
+
+			// TCP 多路复用？
 			if g.GlbServerCfg.TcpMux {
 				fmuxCfg := fmux.DefaultConfig()
 				fmuxCfg.KeepAliveInterval = 20 * time.Second
@@ -346,15 +403,35 @@ func (svr *Service) HandleListener(l frpNet.Listener) {
 					go dealFn(wrapConn)
 				}
 			} else {
+				//
 				dealFn(frpConn)
 			}
+
+
+
 		}(c)
 	}
 }
 
+
+// 客户端注册 control
+//
+//
+// 1. 检测 client 的版本号和 server 是否兼容
+// 2. 获取 client 的 regist 消息里的加密 token 是否正确
+// 3. 获取 client 的 RunID，若不存在则创建
+// 4.
+
+
+
 func (svr *Service) RegisterControl(ctlConn frpNet.Conn, loginMsg *msg.Login) (err error) {
 	ctlConn.Info("client login info: ip [%s] version [%s] hostname [%s] os [%s] arch [%s]",
-		ctlConn.RemoteAddr().String(), loginMsg.Version, loginMsg.Hostname, loginMsg.Os, loginMsg.Arch)
+				ctlConn.RemoteAddr().String(),
+				loginMsg.Version,
+				loginMsg.Hostname,
+				loginMsg.Os,
+				loginMsg.Arch,
+				)
 
 	// Check client version.
 	if ok, msg := version.Compat(loginMsg.Version); !ok {
@@ -363,54 +440,81 @@ func (svr *Service) RegisterControl(ctlConn frpNet.Conn, loginMsg *msg.Login) (e
 	}
 
 	// Check auth.
+	// 获取认证 authKey = hex.encode(md5(token + string(timestamp))), 比对 token 加密后字符串是否匹配。
 	if util.GetAuthKey(g.GlbServerCfg.Token, loginMsg.Timestamp) != loginMsg.PrivilegeKey {
 		err = fmt.Errorf("authorization failed")
 		return
 	}
 
 	// If client's RunId is empty, it's a new client, we just create a new controller.
-	// Otherwise, we check if there is one controller has the same run id. If so, we release previous controller and start new one.
+	// Otherwise, we check if there is one controller has the same run id.
+	// If so, we release previous controller and start new one.
+
+	// 如果 RunID 为空，就新建一个
 	if loginMsg.RunId == "" {
-		loginMsg.RunId, err = util.RandId()
+		loginMsg.RunId, err = util.RandId() // 生成随机的 8 位字符串 ID
 		if err != nil {
 			return
 		}
 	}
 
+
+	// 新建一个 control，记录 connection + loginMsg
 	ctl := NewControl(svr.rc, svr.pxyManager, svr.statsCollector, ctlConn, loginMsg)
 
+
+	// 加入 ctl 管理
 	if oldCtl := svr.ctlManager.Add(loginMsg.RunId, ctl); oldCtl != nil {
 		oldCtl.allShutdown.WaitDone()
 	}
 
+
+
 	ctlConn.AddLogPrefix(loginMsg.RunId)
+
+	//
 	ctl.Start()
+
 
 	// for statistics
 	svr.statsCollector.Mark(stats.TypeNewClient, &stats.NewClientPayload{})
+
 
 	go func() {
 		// block until control closed
 		ctl.WaitClosed()
 		svr.ctlManager.Del(loginMsg.RunId, ctl)
 	}()
+
+
 	return
 }
 
 // RegisterWorkConn register a new work connection to control and proxies need it.
 func (svr *Service) RegisterWorkConn(workConn frpNet.Conn, newMsg *msg.NewWorkConn) {
+
+
+	// 拿到 RunId 对应的 ctrl
 	ctl, exist := svr.ctlManager.GetById(newMsg.RunId)
 	if !exist {
 		workConn.Warn("No client control found for run id [%s]", newMsg.RunId)
 		return
 	}
+
+	// 这个 ctrl 上注册新的 workConnection
 	ctl.RegisterWorkConn(workConn)
 	return
 }
 
 func (svr *Service) RegisterVisitorConn(visitorConn frpNet.Conn, newMsg *msg.NewVisitorConn) error {
-	return svr.rc.VisitorManager.NewConn(newMsg.ProxyName, visitorConn, newMsg.Timestamp, newMsg.SignKey,
-		newMsg.UseEncryption, newMsg.UseCompression)
+	return svr.rc.VisitorManager.NewConn(
+			newMsg.ProxyName,
+			visitorConn,
+			newMsg.Timestamp,
+			newMsg.SignKey,
+			newMsg.UseEncryption,
+			newMsg.UseCompression,
+		)
 }
 
 // Setup a bare-bones TLS config for the server

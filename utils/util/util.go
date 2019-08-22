@@ -40,6 +40,8 @@ func RandIdWithLen(idLen int) (id string, err error) {
 	return
 }
 
+
+// authKey = hex.encode(md5(token + string(timestamp)))
 func GetAuthKey(token string, timestamp int64) (key string) {
 	token = token + fmt.Sprintf("%d", timestamp)
 	md5Ctx := md5.New()

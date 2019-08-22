@@ -111,7 +111,10 @@ var rootCmd = &cobra.Command{
 			return err
 		}
 
+		// 主函数
 		err = runServer()
+
+
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
@@ -195,14 +198,17 @@ func parseServerCommonCfgFromCmd() (err error) {
 }
 
 func runServer() (err error) {
-	log.InitLog(g.GlbServerCfg.LogWay, g.GlbServerCfg.LogFile, g.GlbServerCfg.LogLevel,
-		g.GlbServerCfg.LogMaxDays)
+	log.InitLog(g.GlbServerCfg.LogWay, g.GlbServerCfg.LogFile, g.GlbServerCfg.LogLevel, g.GlbServerCfg.LogMaxDays)
+
+	// server.NewService() 其实就是初始化了一大堆东西。
 	svr, err := server.NewService()
 	if err != nil {
 		return err
 	}
 	log.Info("Start frps success")
 	server.ServerService = svr
+
+	// 主流程
 	svr.Run()
 	return
 }

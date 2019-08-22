@@ -44,14 +44,19 @@ type Proxy interface {
 	log.Logger
 }
 
+
+
+
 type BaseProxy struct {
+
 	name           string
 	rc             *controller.ResourceController
-	statsCollector stats.Collector
-	listeners      []frpNet.Listener
-	usedPortsNum   int
-	poolCount      int
-	getWorkConnFn  GetWorkConnFn
+
+	statsCollector stats.Collector		// 统计
+	listeners      []frpNet.Listener	// 监听句柄数组
+	usedPortsNum   int           		// 占用的端口数目
+	poolCount      int          	 	// 预分配的 WorkConn 缓冲池大小
+	getWorkConnFn  GetWorkConnFn 		// 用于获取 client <-> server 的网络连接 WorkConn
 
 	mu sync.RWMutex
 	log.Logger
@@ -72,18 +77,25 @@ func (pxy *BaseProxy) Close() {
 	}
 }
 
-// GetWorkConnFromPool try to get a new work connections from pool
-// for quickly response, we immediately send the StartWorkConn message to frpc after take out one from pool
+
+
+// GetWorkConnFromPool try to get a new work connections from pool for quickly response,
+// we immediately send the StartWorkConn message to frpc after take out one from pool
 func (pxy *BaseProxy) GetWorkConnFromPool(src, dst net.Addr) (workConn frpNet.Conn, err error) {
 	// try all connections from the pool
 	for i := 0; i < pxy.poolCount+1; i++ {
+
+		// 1. 调用 pxy.getWorkConnFn() 函数获取一个可用的 client <-> server 连接，详见 (ctl *Control) GetWorkConn() 函数实现。
 		if workConn, err = pxy.getWorkConnFn(); err != nil {
 			pxy.Warn("failed to get work connection: %v", err)
 			return
 		}
 		pxy.Info("get a new work connection: [%s]", workConn.RemoteAddr().String())
+
+		// 2. 设置日志前缀，添加 proxyName
 		workConn.AddLogPrefix(pxy.GetName())
 
+		// 3. 从 net.Addr 中反解出 Src<Addr, Port>, Dest<Addr, Port> 两个 Endpoints
 		var (
 			srcAddr    string
 			dstAddr    string
@@ -101,6 +113,8 @@ func (pxy *BaseProxy) GetWorkConnFromPool(src, dst net.Addr) (workConn frpNet.Co
 			dstAddr, dstPortStr, _ = net.SplitHostPort(dst.String())
 			dstPort, _ = strconv.Atoi(dstPortStr)
 		}
+
+		// 4. 发送消息给 client, 知会其
 		err := msg.WriteMsg(workConn, &msg.StartWorkConn{
 			ProxyName: pxy.GetName(),
 			SrcAddr:   srcAddr,
@@ -108,18 +122,23 @@ func (pxy *BaseProxy) GetWorkConnFromPool(src, dst net.Addr) (workConn frpNet.Co
 			DstAddr:   dstAddr,
 			DstPort:   uint16(dstPort),
 		})
+
+
 		if err != nil {
 			workConn.Warn("failed to send message to work connection from pool: %v, times: %d", err, i)
 			workConn.Close()
 		} else {
+			// 成功则 break 出循环
 			break
 		}
 	}
+
 
 	if err != nil {
 		pxy.Error("try to get work connection failed in the end")
 		return
 	}
+
 	return
 }
 
@@ -144,9 +163,17 @@ func (pxy *BaseProxy) startListenHandler(p Proxy, handler func(Proxy, frpNet.Con
 	}
 }
 
-func NewProxy(runId string, rc *controller.ResourceController, statsCollector stats.Collector, poolCount int,
-	getWorkConnFn GetWorkConnFn, pxyConf config.ProxyConf) (pxy Proxy, err error) {
 
+
+func NewProxy( 	runId string,
+				rc *controller.ResourceController,
+				statsCollector stats.Collector,
+				poolCount int,
+				getWorkConnFn GetWorkConnFn,
+				pxyConf config.ProxyConf) (pxy Proxy, err error) {
+
+
+	//
 	basePxy := BaseProxy{
 		name:           pxyConf.GetBaseInfo().ProxyName,
 		rc:             rc,
@@ -156,6 +183,8 @@ func NewProxy(runId string, rc *controller.ResourceController, statsCollector st
 		getWorkConnFn:  getWorkConnFn,
 		Logger:         log.NewPrefixLogger(runId),
 	}
+
+
 	switch cfg := pxyConf.(type) {
 	case *config.TcpProxyConf:
 		basePxy.usedPortsNum = 1
@@ -192,6 +221,7 @@ func NewProxy(runId string, rc *controller.ResourceController, statsCollector st
 	default:
 		return pxy, fmt.Errorf("proxy type not support")
 	}
+
 	pxy.AddLogPrefix(pxy.GetName())
 	return
 }
@@ -236,6 +266,9 @@ func HandleUserTcpConnection(pxy Proxy, userConn frpNet.Conn, statsCollector sta
 	})
 	pxy.Debug("join connections closed")
 }
+
+
+
 
 type ProxyManager struct {
 	// proxies indexed by proxy name
