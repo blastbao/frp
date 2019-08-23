@@ -83,7 +83,6 @@ func (cm *ControlManager) GetById(runId string) (ctl *Control, ok bool) {
 // Server 的控制 control
 type Control struct {
 
-
 	// all resource managers and controllers
 	rc *controller.ResourceController
 
@@ -92,7 +91,6 @@ type Control struct {
 
 	// stats collector to store stats info of clients and proxies
 	statsCollector stats.Collector
-
 
 
 	// login message
@@ -170,11 +168,28 @@ func NewControl(rc *controller.ResourceController,
 	}
 }
 
+
+
+
+
 // Start send a login success message to client and start working.
+
+
+// 1. 向 client 发送一个 LoginResp 的消息，告知 client 其 Login 成功
+// 2. 启动 ctl.writer()，不断从 ctl.sendCh 中读取消息并发送给 client
+// 3. 初始化 workConn 连接池，连续向 client 发送多个 msg.ReqWorkConn{} 消息，让 client 建立多个 conn 到 server
+// 4. 启动 ctl.manager()，主要行为是:
+// 		（1）心跳检测：检查 client 是否在正常发送 ping 消息，若不正常则关闭连接；
+// 		（2）从 ctl.readCh 读取消息、处理、写回响应消息到 ctl.sendCh。
+//	  可见，ctl.manager() 可被视为  ctl.writer() 和 ctl.reader() 之间的桥梁。
+// 5. ctl.reader()，不断从和 client 的网络连接中读取消息并解析，然后发送到 ctl.readCh，然后 ctl.manager() 会读取出该消息并处理。
+// 6. ctl.stoper()，
+
+
 func (ctl *Control) Start() {
 
 
-	// 向客户端发送一个 LoginResp 的消息，告知 client 成功
+	// 向 client 发送一个 LoginResp 的消息，告知 client 成功
 	loginRespMsg := &msg.LoginResp{
 		Version:       version.Full(),
 		RunId:         ctl.runId,
@@ -185,16 +200,13 @@ func (ctl *Control) Start() {
 	// 数据写入到 connection
 	msg.WriteMsg(ctl.conn, loginRespMsg)
 
-
 	// 从 ctl.sendCh 中读取消息并发送给客户端
 	go ctl.writer()
-
 
 	// 与客户端开启多个连接
 	for i := 0; i < ctl.poolCount; i++ {
 		ctl.sendCh <- &msg.ReqWorkConn{}
 	}
-
 
 	// 1. 心跳检查与发起重连
 	// 2. 从 ctl.readCh 中读取消息
@@ -207,6 +219,8 @@ func (ctl *Control) Start() {
 	go ctl.stoper()
 }
 
+
+// 把 conn 放到 workConnCh 中，如果已经放满，就 close 掉。
 func (ctl *Control) RegisterWorkConn(conn net.Conn) {
 	defer func() {
 		if err := recover(); err != nil {
@@ -214,7 +228,6 @@ func (ctl *Control) RegisterWorkConn(conn net.Conn) {
 			ctl.conn.Error(string(debug.Stack()))
 		}
 	}()
-
 	select {
 	case ctl.workConnCh <- conn:
 		ctl.conn.Debug("new work connection registered")
@@ -458,10 +471,10 @@ func (ctl *Control) manager() {
 
 			switch m := rawMsg.(type) {
 
-			// NewProxy 消息: 创建一个新 Proxy
+			// NewProxy 消息
 			case *msg.NewProxy:
 
-				// 注册新 proxy 到 ctl 上
+				// 创建一个新 Proxy，并将其注册到 ctl 上
 				remoteAddr, err := ctl.RegisterProxy(m) // register proxy in this control
 
 				// 构造回复消息
@@ -506,10 +519,18 @@ func (ctl *Control) manager() {
 
 
 
+
+// 1. 根据 client 发来的 pxyMsg 消息来生成特定类型的 pxyConf 配置
+// 2. 根据 pxyConf 的类型创建不同的 pxy 对象
+// 3. 检查 ctrl 占用的总端口号 ctl.portsUsedNum 是否超过阈值；更新 ctl.portsUsedNum
+// 4. 启动 pxy
+// 5. 保存 pair<pxyName, pxy> 映射到 ctl.pxyManager 中
+// 6. 保存 pair<pxyName, pxy> 映射到 ctl.proxies 中
 func (ctl *Control) RegisterProxy(pxyMsg *msg.NewProxy) (remoteAddr string, err error) {
 	var pxyConf config.ProxyConf
 
 	// Load configures from NewProxy message and check.
+	//
 	// 根据 pxyMsg 消息来生成特定协议的 pxyConf 配置结构体对象
 	pxyConf, err = config.NewProxyConfFromMsg(pxyMsg)
 	if err != nil {
@@ -517,43 +538,36 @@ func (ctl *Control) RegisterProxy(pxyMsg *msg.NewProxy) (remoteAddr string, err 
 	}
 
 	// NewProxy will return a interface Proxy.
-	// In fact it create different proxies by different proxy type,
-	// we just call run() here.
-
-
-
-	// 生成一个 Proxy
+	// In fact it create different proxies by different proxy type, we just call run() here.
+	//
+	// 根据 pxyConf 的类型创建不同的 Proxy 对象
 	pxy, err := proxy.NewProxy(ctl.runId, ctl.rc, ctl.statsCollector, ctl.poolCount, ctl.GetWorkConn, pxyConf)
 	if err != nil {
 		return remoteAddr, err
 	}
 
-
-
 	// Check ports used number in each client
 	//
+	// 如果设置了单个 client 所能开启的最多端口数
 	if g.GlbServerCfg.MaxPortsPerClient > 0 {
 
 		ctl.mu.Lock()
-
-
-
-
-		if ctl.portsUsedNum+pxy.GetUsedPortsNum() > int(g.GlbServerCfg.MaxPortsPerClient) {
+		// 检查当前 ctrl 占用的总端口号 和 新 proxy 占用的端口号 的总数是否超过阈值，若超过则报错
+		if ctl.portsUsedNum + pxy.GetUsedPortsNum() > int(g.GlbServerCfg.MaxPortsPerClient) {
 			ctl.mu.Unlock()
 			err = fmt.Errorf("exceed the max_ports_per_client")
 			return
 		}
 
+		// 更新当前 ctrl 占用的总端口号的总数
 		ctl.portsUsedNum = ctl.portsUsedNum + pxy.GetUsedPortsNum()
-
-
 		ctl.mu.Unlock()
 
-
+		// 如果函数出错，则在退出时更新 ctl.portsUsedNum
 		defer func() {
 			if err != nil {
 				ctl.mu.Lock()
+				// 出错则减回来
 				ctl.portsUsedNum = ctl.portsUsedNum - pxy.GetUsedPortsNum()
 				ctl.mu.Unlock()
 			}
@@ -561,7 +575,7 @@ func (ctl *Control) RegisterProxy(pxyMsg *msg.NewProxy) (remoteAddr string, err 
 	}
 
 
-	// 运行 proxy
+	// 运行 pxy.Run()，它返回
 	remoteAddr, err = pxy.Run()
 	if err != nil {
 		return

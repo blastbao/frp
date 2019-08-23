@@ -23,6 +23,7 @@ import (
 
 // All resource managers and controllers
 type ResourceController struct {
+
 	// Manage all visitor listeners
 	VisitorManager *VisitorManager
 

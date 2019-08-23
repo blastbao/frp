@@ -90,18 +90,21 @@ type Service struct {
 
 func NewService() (svr *Service, err error) {
 
-
 	cfg := &g.GlbServerCfg.ServerCommonConf
-
 
 	svr = &Service{
 		ctlManager: NewControlManager(),      // 新建ctl-Manager
 		pxyManager: proxy.NewProxyManager(),  // 新建Proxy-Manager
+
+
+		//
 		rc: &controller.ResourceController{
 			VisitorManager: controller.NewVisitorManager(),
 			TcpPortManager: ports.NewPortManager("tcp", cfg.ProxyBindAddr, cfg.AllowPorts),
 			UdpPortManager: ports.NewPortManager("udp", cfg.ProxyBindAddr, cfg.AllowPorts),
 		},
+
+
 		httpVhostRouter: vhost.NewVhostRouters(),
 		tlsConfig:       generateTLSConfig(),
 	}
@@ -275,6 +278,14 @@ func (svr *Service) Run() {
 	svr.HandleListener(svr.listener)
 }
 
+// 相对于客户端程序，服务端程序的功能就比较的单一，就是实现一个连接的转发。
+// 程序的入口位于 /cmd/frps/main.go ，开始的步骤和客户端一样，都是解析配置文件，
+// 最后调用了 /frp/server/server.go#Run(),这里面就调用一个 HandleListener(...) 函数，
+// 里面是实现也比较的简单，一个标准的tcp阻塞函数，当有新的连接来的时候开启一个 goroutine ，
+// 在这个 goroutine 中获取消息的内容，再根据不同的消息类型进行不同的处理，这里有3种类型，
+// 分别为 Login，NewWorkConn 和 NewVisitorConn，很明显 Login 就是对客户端的授权处理，
+// 而 NewWorkConn 就是客户端发起的服务。
+
 func (svr *Service) HandleListener(l frpNet.Listener) {
 
 	// Listen for incoming connections from client.
@@ -286,7 +297,6 @@ func (svr *Service) HandleListener(l frpNet.Listener) {
 			log.Warn("Listener for incoming connections from client closed")
 			return
 		}
-
 		log.Trace("start check TLS connection...")
 
 		// 保存原始连接
@@ -301,23 +311,20 @@ func (svr *Service) HandleListener(l frpNet.Listener) {
 		}
 		log.Trace("success check TLS connection")
 
-
-		// 每来一个新的连接，就起一个 goroutine 去处理
-
 		// Start a new goroutine for dealing connections.
+		// 每来一个新的连接，就起一个 goroutine 去处理
 		go func(frpConn frpNet.Conn) {
 
-
-			//
+			// 请求处理函数
 			dealFn := func(conn frpNet.Conn) {
 
-				// 定义消息结构体，用来接收 frpc 发来的消息
+				// 定义消息对象 rawMsg ，用来保存 frpc 发来的消息
 				var rawMsg msg.Message
 
 				// 设置读取消息的超时
 				_ = conn.SetReadDeadline(time.Now().Add(connReadTimeout))
 
-				// 读取 frpc 发来的消息
+				// 将 frpc 发来的消息存到 rawMsg 中
 				if rawMsg, err = msg.ReadMsg(conn); err != nil {
 					log.Trace("Failed to read message: %v", err)
 					conn.Close()
@@ -327,12 +334,12 @@ func (svr *Service) HandleListener(l frpNet.Listener) {
 				// 取消读取超时设置，也即不设超时
 				_ = conn.SetReadDeadline(time.Time{})
 
-
-				//（重要）判断frpc 发来的消息类型
+				//（重要）判断 client 发来的消息类型，进行相应处理
 				switch m := rawMsg.(type) {
 
-				// Login 就是新的客户端连上去之后进行注册
+				// client 注册到 server
 				case *msg.Login:
+					// 为 client 新建 ctrl 并注册到 svr.ctlManager，用于维护 client 和 server 间的网络连接
 					err = svr.RegisterControl(conn, m)
 					// If login failed, send error message there.
 					// Otherwise send success message in control's work goroutine.
@@ -345,12 +352,9 @@ func (svr *Service) HandleListener(l frpNet.Listener) {
 						conn.Close()
 					}
 
-
-				// NewWorkConn 用于转发流量的
+				// 收到 client 发来的 NewWorkConn 消息时，执行 svr.RegisterWorkConn() 把这个 conn 加入到 pool 中，供后续使用。
 				case *msg.NewWorkConn:
-
 					svr.RegisterWorkConn(conn, m)
-
 
 				// NewVisitorConn 是用于 stcp, 也就是端对端加密通信的
 				case *msg.NewVisitorConn:
@@ -382,6 +386,7 @@ func (svr *Service) HandleListener(l frpNet.Listener) {
 
 			// TCP 多路复用？
 			if g.GlbServerCfg.TcpMux {
+
 				fmuxCfg := fmux.DefaultConfig()
 				fmuxCfg.KeepAliveInterval = 20 * time.Second
 				fmuxCfg.LogOutput = ioutil.Discard
@@ -406,24 +411,17 @@ func (svr *Service) HandleListener(l frpNet.Listener) {
 				//
 				dealFn(frpConn)
 			}
-
-
-
 		}(c)
 	}
 }
 
 
-// 客户端注册 control
-//
+// client 注册 ctrl 到 svr.ctlManager，每个 client 有唯一的一个 ctrl 连接到 server
 //
 // 1. 检测 client 的版本号和 server 是否兼容
 // 2. 获取 client 的 regist 消息里的加密 token 是否正确
 // 3. 获取 client 的 RunID，若不存在则创建
-// 4.
-
-
-
+// 4. 新建 ctrl 结构体，添加到 svr.ctlManager，并启动 ctl.Start()
 func (svr *Service) RegisterControl(ctlConn frpNet.Conn, loginMsg *msg.Login) (err error) {
 	ctlConn.Info("client login info: ip [%s] version [%s] hostname [%s] os [%s] arch [%s]",
 				ctlConn.RemoteAddr().String(),
@@ -434,13 +432,14 @@ func (svr *Service) RegisterControl(ctlConn frpNet.Conn, loginMsg *msg.Login) (e
 				)
 
 	// Check client version.
+	// 1. 版本兼容性检查
 	if ok, msg := version.Compat(loginMsg.Version); !ok {
 		err = fmt.Errorf("%s", msg)
 		return
 	}
 
 	// Check auth.
-	// 获取认证 authKey = hex.encode(md5(token + string(timestamp))), 比对 token 加密后字符串是否匹配。
+	// 2. 获取认证 authKey = hex.encode(md5(token + string(timestamp))), 比对 token 加密后字符串是否匹配。
 	if util.GetAuthKey(g.GlbServerCfg.Token, loginMsg.Timestamp) != loginMsg.PrivilegeKey {
 		err = fmt.Errorf("authorization failed")
 		return
@@ -450,7 +449,7 @@ func (svr *Service) RegisterControl(ctlConn frpNet.Conn, loginMsg *msg.Login) (e
 	// Otherwise, we check if there is one controller has the same run id.
 	// If so, we release previous controller and start new one.
 
-	// 如果 RunID 为空，就新建一个
+	// 3. 如果 RunID 为空，就新建一个
 	if loginMsg.RunId == "" {
 		loginMsg.RunId, err = util.RandId() // 生成随机的 8 位字符串 ID
 		if err != nil {
@@ -459,20 +458,18 @@ func (svr *Service) RegisterControl(ctlConn frpNet.Conn, loginMsg *msg.Login) (e
 	}
 
 
-	// 新建一个 control，记录 connection + loginMsg
+	// 4. 新建一个 control，记录 connection + loginMsg
 	ctl := NewControl(svr.rc, svr.pxyManager, svr.statsCollector, ctlConn, loginMsg)
 
 
-	// 加入 ctl 管理
+	// 5.  加入 ctl 管理
 	if oldCtl := svr.ctlManager.Add(loginMsg.RunId, ctl); oldCtl != nil {
 		oldCtl.allShutdown.WaitDone()
 	}
 
-
-
 	ctlConn.AddLogPrefix(loginMsg.RunId)
 
-	//
+	// 6. 启动 ctl
 	ctl.Start()
 
 
@@ -493,15 +490,14 @@ func (svr *Service) RegisterControl(ctlConn frpNet.Conn, loginMsg *msg.Login) (e
 // RegisterWorkConn register a new work connection to control and proxies need it.
 func (svr *Service) RegisterWorkConn(workConn frpNet.Conn, newMsg *msg.NewWorkConn) {
 
-
-	// 拿到 RunId 对应的 ctrl
+	// RunId 和 client 是一一对应的，所以这里是拿到 client 对应的 ctrl 结构体
 	ctl, exist := svr.ctlManager.GetById(newMsg.RunId)
 	if !exist {
 		workConn.Warn("No client control found for run id [%s]", newMsg.RunId)
 		return
 	}
 
-	// 这个 ctrl 上注册新的 workConnection
+	// 把 workConn 放到 workConnCh 中，如果已经放满，就 close 掉。
 	ctl.RegisterWorkConn(workConn)
 	return
 }

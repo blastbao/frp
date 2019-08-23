@@ -22,6 +22,9 @@ import (
 	frpNet "github.com/fatedier/frp/utils/net"
 )
 
+
+
+
 type TcpProxy struct {
 	*BaseProxy
 	cfg *config.TcpProxyConf
@@ -30,7 +33,10 @@ type TcpProxy struct {
 }
 
 func (pxy *TcpProxy) Run() (remoteAddr string, err error) {
+
+
 	if pxy.cfg.Group != "" {
+
 		l, realPort, errRet := pxy.rc.TcpGroupCtl.Listen(pxy.name, pxy.cfg.Group, pxy.cfg.GroupKey, g.GlbServerCfg.ProxyBindAddr, pxy.cfg.RemotePort)
 		if errRet != nil {
 			err = errRet
@@ -46,7 +52,11 @@ func (pxy *TcpProxy) Run() (remoteAddr string, err error) {
 		listener.AddLogPrefix(pxy.name)
 		pxy.listeners = append(pxy.listeners, listener)
 		pxy.Info("tcp proxy listen port [%d] in group [%s]", pxy.cfg.RemotePort, pxy.cfg.Group)
+
+
 	} else {
+
+		//
 		pxy.realPort, err = pxy.rc.TcpPortManager.Acquire(pxy.name, pxy.cfg.RemotePort)
 		if err != nil {
 			return
@@ -71,6 +81,8 @@ func (pxy *TcpProxy) Run() (remoteAddr string, err error) {
 	pxy.startListenHandler(pxy, HandleUserTcpConnection)
 	return
 }
+
+
 
 func (pxy *TcpProxy) GetConf() config.ProxyConf {
 	return pxy.cfg
