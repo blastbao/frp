@@ -96,14 +96,12 @@ func NewService() (svr *Service, err error) {
 		ctlManager: NewControlManager(),      // 新建ctl-Manager
 		pxyManager: proxy.NewProxyManager(),  // 新建Proxy-Manager
 
-
-		//
 		rc: &controller.ResourceController{
 			VisitorManager: controller.NewVisitorManager(),
+
 			TcpPortManager: ports.NewPortManager("tcp", cfg.ProxyBindAddr, cfg.AllowPorts),
 			UdpPortManager: ports.NewPortManager("udp", cfg.ProxyBindAddr, cfg.AllowPorts),
 		},
-
 
 		httpVhostRouter: vhost.NewVhostRouters(),
 		tlsConfig:       generateTLSConfig(),
@@ -277,6 +275,8 @@ func (svr *Service) Run() {
 	// tcp
 	svr.HandleListener(svr.listener)
 }
+
+
 
 // 相对于客户端程序，服务端程序的功能就比较的单一，就是实现一个连接的转发。
 // 程序的入口位于 /cmd/frps/main.go ，开始的步骤和客户端一样，都是解析配置文件，
@@ -457,12 +457,10 @@ func (svr *Service) RegisterControl(ctlConn frpNet.Conn, loginMsg *msg.Login) (e
 		}
 	}
 
-
 	// 4. 新建一个 control，记录 connection + loginMsg
 	ctl := NewControl(svr.rc, svr.pxyManager, svr.statsCollector, ctlConn, loginMsg)
 
-
-	// 5.  加入 ctl 管理
+	// 5. 加入 ctl 管理
 	if oldCtl := svr.ctlManager.Add(loginMsg.RunId, ctl); oldCtl != nil {
 		oldCtl.allShutdown.WaitDone()
 	}
@@ -472,10 +470,8 @@ func (svr *Service) RegisterControl(ctlConn frpNet.Conn, loginMsg *msg.Login) (e
 	// 6. 启动 ctl
 	ctl.Start()
 
-
 	// for statistics
 	svr.statsCollector.Mark(stats.TypeNewClient, &stats.NewClientPayload{})
-
 
 	go func() {
 		// block until control closed

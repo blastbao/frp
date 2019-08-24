@@ -438,6 +438,9 @@ func (ctl *Control) WaitClosed() {
 	ctl.allShutdown.WaitDone()
 }
 
+// 当 client 和 server 都启动，并且 client 成功 login 之后，
+// client 会发送 NewProxy、CloseProxy、Ping 等消息给 server 。
+// 而 server 收到 msg.NewProxy 消息后，便会创建和初始化对应的 Proxy 对象，如 TcpProxy 等。
 func (ctl *Control) manager() {
 	defer func() {
 		if err := recover(); err != nil {
@@ -471,10 +474,10 @@ func (ctl *Control) manager() {
 
 			switch m := rawMsg.(type) {
 
-			// NewProxy 消息
+			// 收到 NewProxy 消息
 			case *msg.NewProxy:
 
-				// 创建一个新 Proxy，并将其注册到 ctl 上
+				// 根据 NewProxy 消息所含的代理配置信息创建 Proxy，将其注册到 ctl 并启动 [监听&代理转发]，返回其在 server 上的代理监听地址 remoteAddr 。
 				remoteAddr, err := ctl.RegisterProxy(m) // register proxy in this control
 
 				// 构造回复消息
@@ -488,9 +491,10 @@ func (ctl *Control) manager() {
 					resp.Error = err.Error()
 					ctl.conn.Warn("new proxy [%s] error: %v", m.ProxyName, err)
 				} else {
-					// 设置
+					// 设置当前代理 proxy 在 server 上的监听地址 "addr:port" 。
 					resp.RemoteAddr = remoteAddr
 					ctl.conn.Info("new proxy [%s] success", m.ProxyName)
+					// 监控上报 - 创建 Proxy
 					ctl.statsCollector.Mark(
 						stats.TypeNewProxy,
 						&stats.NewProxyPayload{
@@ -500,14 +504,15 @@ func (ctl *Control) manager() {
 					)
 				}
 
-				// 将回复消息 NewProxyResp 放到回复队列中，等待发给 client
+				// 将消息resp * NewProxyResp 放到回复队列中，等待发给 client
 				ctl.sendCh <- resp
+
 			case *msg.CloseProxy:
 				// 关闭 proxy
 				ctl.CloseProxy(m)
 				ctl.conn.Info("close proxy [%s] success", m.ProxyName)
 			case *msg.Ping:
-				// 收到 client 心跳，更新心跳接收时间，然后回复心跳响应包
+				// 收到 client 心跳 Ping ，更新心跳接收时间，然后回复 Pong 心跳响应包
 				ctl.lastPing = time.Now()
 				ctl.conn.Debug("receive heartbeat")
 				ctl.sendCh <- &msg.Pong{}
@@ -521,11 +526,11 @@ func (ctl *Control) manager() {
 
 
 // 1. 根据 client 发来的 pxyMsg 消息来生成特定类型的 pxyConf 配置
-// 2. 根据 pxyConf 的类型创建不同的 pxy 对象
-// 3. 检查 ctrl 占用的总端口号 ctl.portsUsedNum 是否超过阈值；更新 ctl.portsUsedNum
-// 4. 启动 pxy
-// 5. 保存 pair<pxyName, pxy> 映射到 ctl.pxyManager 中
-// 6. 保存 pair<pxyName, pxy> 映射到 ctl.proxies 中
+// 2. 根据 pxyConf 配置的类型创建不同的 pxy 对象，比如 ssh 代理会返回 TcpProxy
+// 3. 检查 ctrl 占用的总端口数目 ctl.portsUsedNum 是否超过阈值；更新 ctl.portsUsedNum；
+// 4. 启动 pxy.Run()，
+// 5. 保存 pair<pxyName, pxy> 到 ctl.pxyManager 中
+// 6. 保存 pair<pxyName, pxy> 到 ctl.proxies 中
 func (ctl *Control) RegisterProxy(pxyMsg *msg.NewProxy) (remoteAddr string, err error) {
 	var pxyConf config.ProxyConf
 
@@ -540,11 +545,13 @@ func (ctl *Control) RegisterProxy(pxyMsg *msg.NewProxy) (remoteAddr string, err 
 	// NewProxy will return a interface Proxy.
 	// In fact it create different proxies by different proxy type, we just call run() here.
 	//
-	// 根据 pxyConf 的类型创建不同的 Proxy 对象
+	// 根据 pxyConf 的类型创建不同的 Proxy 对象，比如 ssh 代理会返回 TcpProxy
 	pxy, err := proxy.NewProxy(ctl.runId, ctl.rc, ctl.statsCollector, ctl.poolCount, ctl.GetWorkConn, pxyConf)
 	if err != nil {
 		return remoteAddr, err
 	}
+
+
 
 	// Check ports used number in each client
 	//
@@ -574,13 +581,12 @@ func (ctl *Control) RegisterProxy(pxyMsg *msg.NewProxy) (remoteAddr string, err 
 		}()
 	}
 
-
-	// 运行 pxy.Run()，它返回
+	// [重要]
+	// 运行 pxy.Run()，它返回 server 监听的代理地址 remoteAddr = addr:port
 	remoteAddr, err = pxy.Run()
 	if err != nil {
 		return
 	}
-
 
 	defer func() {
 		if err != nil {
@@ -598,7 +604,6 @@ func (ctl *Control) RegisterProxy(pxyMsg *msg.NewProxy) (remoteAddr string, err 
 	ctl.mu.Lock()
 	ctl.proxies[pxy.GetName()] = pxy
 	ctl.mu.Unlock()
-
 
 	return
 }

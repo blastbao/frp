@@ -37,6 +37,8 @@ type HttpProxy struct {
 }
 
 func (pxy *HttpProxy) Run() (remoteAddr string, err error) {
+
+
 	routeConfig := vhost.VhostRouteConfig{
 		RewriteHost:  pxy.cfg.HostHeaderRewrite,
 		Headers:      pxy.cfg.Headers,

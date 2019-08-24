@@ -54,6 +54,11 @@ type PortManager struct {
 }
 
 
+
+
+
+
+
 // netType: 协议类型， tcp or udp
 // bindAddr: 本地监听 IP 地址
 // allowPorts: 允许监听的端口
@@ -67,18 +72,19 @@ func NewPortManager(netType string, bindAddr string, allowPorts map[int]struct{}
 		netType:       netType,
 	}
 
-	// 如果配置了代理端口，则用其初始化 pm.freePorts[]，否则允许代理任意端口
+	// 如果明确限定了可被监听的端口列表 allowPorts ，则用其初始化 pm.freePorts[]，否则允许代理任意端口
 	if len(allowPorts) > 0 {
 		for port, _ := range allowPorts {
 			pm.freePorts[port] = struct{}{}
 		}
 	} else {
+		// 这里把 [MinPort, MaxPort] 区间的每个 port 都放到 pm.freePorts[] 中，留待使用。
 		for i := MinPort; i <= MaxPort; i++ {
 			pm.freePorts[i] = struct{}{}
 		}
 	}
 
-	//
+	// 每个小时检查一次，获取已经关闭超过 24h 的代理 proxy ，把其从 pm.reservedPorts 中删除
 	go pm.cleanReservedPortsWorker()
 	return pm
 }
@@ -245,13 +251,13 @@ func (pm *PortManager) Release(port int) {
 
 
 // Release reserved port if it isn't used in last 24 hours.
-//
+// 每个小时检查一次，获取已经关闭超过 24h 的代理 proxy ，把其从 pm.reservedPorts 中删除
 func (pm *PortManager) cleanReservedPortsWorker() {
 	for {
 		// 每小时检查一次
 		time.Sleep(CleanReservedPortsInterval)
 		pm.mu.Lock()
-		// 遍历所有 proxy，获取对应的 portCtx，如果对应端口已经被关闭(Release)，且最近的更新时间超过 24h，则从 pm.reservedPorts 删除这个 proxy 
+		// 遍历所有 proxy，获取对应的 portCtx，如果对应端口已经被关闭(Release)，且最近的更新时间超过 24h，则从 pm.reservedPorts 删除这个 proxy
 		for name, ctx := range pm.reservedPorts {
 			if ctx.Closed && time.Since(ctx.UpdateTime) > MaxPortReservedDuration {
 				delete(pm.reservedPorts, name)

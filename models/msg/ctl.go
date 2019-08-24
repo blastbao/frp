@@ -42,5 +42,6 @@ func ReadMsgInto(c io.Reader, msg Message) (err error) {
 }
 
 func WriteMsg(c io.Writer, msg interface{}) (err error) {
+	// 消息结构: [第一字节为消息类型][第二字节为消息长度][后续内容为消息体(json格式)]
 	return msgCtl.WriteMsg(c, msg)
 }

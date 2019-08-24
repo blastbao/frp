@@ -250,7 +250,6 @@ func (svr *Service) login() (conn frpNet.Conn, session *fmux.Session, err error)
 		conn = frpNet.WrapConn(stream)
 	}
 
-
 	now := time.Now().Unix()
 
 	// 构造 Login 请求

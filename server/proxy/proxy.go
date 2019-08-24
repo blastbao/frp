@@ -77,7 +77,6 @@ func (pxy *BaseProxy) Close() {
 // we immediately send the StartWorkConn message to frpc after take out one from pool
 
 
-//
 // 这里 src 是远程用户的 IP，dst 是 frp server 本地的公网 IP
 func (pxy *BaseProxy) GetWorkConnFromPool(src, dst net.Addr) (workConn frpNet.Conn, err error) {
 	// try all connections from the pool
@@ -93,7 +92,7 @@ func (pxy *BaseProxy) GetWorkConnFromPool(src, dst net.Addr) (workConn frpNet.Co
 		// 2. 设置日志前缀，添加 proxyName
 		workConn.AddLogPrefix(pxy.GetName())
 
-		// 3. 从 net.Addr 中反解出 Src<Addr, Port>, Dest<Addr, Port> 两个 Endpoints
+		// 3. 从参数 src, dst net.Addr 中反解出 Src<Addr, Port>, Dest<Addr, Port> 两个 Endpoints
 		var (
 			srcAddr    string
 			dstAddr    string
@@ -112,7 +111,7 @@ func (pxy *BaseProxy) GetWorkConnFromPool(src, dst net.Addr) (workConn frpNet.Co
 			dstPort, _ = strconv.Atoi(dstPortStr)
 		}
 
-		// 4. 发送 StartWorkConn 消息给 client, 知会它创建新连接到 server
+		// 4. 发送 StartWorkConn 消息给 client, 知会它有来自 user 的新连接到达，需要响应
 		err := msg.WriteMsg(workConn, &msg.StartWorkConn{
 			ProxyName: pxy.GetName(),
 			SrcAddr:   srcAddr, 		// user ip
@@ -142,10 +141,21 @@ func (pxy *BaseProxy) GetWorkConnFromPool(src, dst net.Addr) (workConn frpNet.Co
 //
 // p: p will just be passed to handler(Proxy, frpNet.Conn).
 // handler: each proxy type can set different handler function to deal with connections accepted from listeners.
+//
+//
 func (pxy *BaseProxy) startListenHandler(p Proxy, handler func(Proxy, frpNet.Conn, stats.Collector)) {
+
+	// 遍历 pxy 的每个 listener，对每个 listener 进行请求监听和处理
 	for _, listener := range pxy.listeners {
+
+		// while(true) {
+		// 	   accept()   // 连接建立
+		// 	   handler()  // 请求处理
+		// }
+
 		go func(l frpNet.Listener) {
 			for {
+
 				// block
 				// if listener is closed, err returned
 				c, err := l.Accept()
@@ -153,11 +163,14 @@ func (pxy *BaseProxy) startListenHandler(p Proxy, handler func(Proxy, frpNet.Con
 					pxy.Info("listener is closed")
 					return
 				}
+
 				pxy.Debug("get a user connection [%s]", c.RemoteAddr().String())
 				go handler(p, c, pxy.statsCollector)
+
 			}
 		}(listener)
 	}
+
 }
 
 func NewProxy(runId string,
@@ -225,6 +238,9 @@ func NewProxy(runId string,
 // HandleUserTcpConnection is used for incoming tcp user connections.
 // It can be used for tcp, http, https type.
 //
+//
+// 在 tcp，stcp，https 的协议场景下，每当有用户 user 发来一个新的连接请求时，就会调用本函数来进行请求的代理。
+//
 // 1. 调用 pxy.GetWorkConnFromPool() 函数从连接池获取一个可用的 frpc <-> frps 的 workConn 连接
 // 2. 对 workConn 进行加密、压缩封装
 // 3. 在 userConn 和 workConn 直接建立双向连接，阻塞式
@@ -232,23 +248,18 @@ func NewProxy(runId string,
 func HandleUserTcpConnection(pxy Proxy, userConn frpNet.Conn, statsCollector stats.Collector) {
 	defer userConn.Close()
 
+	// 每当公网有 user 发来一个新的连接请求时，frps 就会下发一个指令给 frpc ，要求建立一个新的 workConn 连接，
+	// 然后 frps 再用 frpIo.Join() 把 server 同 user 的连接 userConn 与新建的 server 和 client 的连接 workConn 串连起来，完成代理。
 
-	// try all connections from the pool
-
-
-
-	// 这里 userConn.RemoteAddr() 是远程用户的 IP，userConn.LocalAddr() 是 server 本地的公网 IP
+	// 这里 userConn.RemoteAddr() 是远程用户 user 的 IP，userConn.LocalAddr() 是 server 本地的公网 IP
 	workConn, err := pxy.GetWorkConnFromPool(userConn.RemoteAddr(), userConn.LocalAddr())
 	if err != nil {
 		return
 	}
 	defer workConn.Close()
 
-
-
 	var local io.ReadWriteCloser = workConn
 	cfg := pxy.GetConf().GetBaseInfo()
-
 
 	// 加密？
 	if cfg.UseEncryption {
@@ -270,14 +281,14 @@ func HandleUserTcpConnection(pxy Proxy, userConn frpNet.Conn, statsCollector sta
 		userConn.LocalAddr().String(),
 		userConn.RemoteAddr().String())
 
-	//  监控 - 连接建立
+	// 监控 - 连接建立
 	statsCollector.Mark(stats.TypeOpenConnection,
 		&stats.OpenConnectionPayload{
 			ProxyName: pxy.GetName(),
 		},
 	)
 
-	// 在 userConn 和 workConn 直接建立双向连接，阻塞式
+	// 在 userConn 和 workConn 直接建立双向连接，阻塞式，一个关闭则全都关闭
 	inCount, outCount := frpIo.Join(local, userConn)
 
 
