@@ -1,6 +1,10 @@
 package mux
 
+
+
+// MatchFunc 函数用来判断 data 属于什么协议。
 type MatchFunc func(data []byte) (match bool)
+
 
 var (
 	HttpsNeedBytesNum uint32 = 1
@@ -8,7 +12,10 @@ var (
 	YamuxNeedBytesNum uint32 = 2
 )
 
+
+// 下面三个函数实现了检测 data 是否是 HTTPS, HTTP 以及 yamux 协议类型，返回 true or false。
 var HttpsMatchFunc MatchFunc = func(data []byte) bool {
+
 	if len(data) < int(HttpsNeedBytesNum) {
 		return false
 	}

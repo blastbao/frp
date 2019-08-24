@@ -35,12 +35,19 @@ import (
 	fmux "github.com/hashicorp/yamux"
 )
 
+
+
+// Visitor 是指使用 stcp 和 xtcp 的时候，请求公网服务器的那台电脑也要装一个客户端，那个就是所谓的 visitor
+
+
+
 // Visitor is used for forward traffics from local port tot remote service.
 type Visitor interface {
 	Run() error
 	Close()
 	log.Logger
 }
+
 
 func NewVisitor(ctl *Control, cfg config.VisitorConf) (visitor Visitor) {
 	baseVisitor := BaseVisitor{

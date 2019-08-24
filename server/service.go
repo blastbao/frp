@@ -359,6 +359,8 @@ func (svr *Service) HandleListener(l frpNet.Listener) {
 				// NewVisitorConn 是用于 stcp, 也就是端对端加密通信的
 				case *msg.NewVisitorConn:
 
+
+
 					if err = svr.RegisterVisitorConn(conn, m); err != nil {
 
 						conn.Warn("%v", err)

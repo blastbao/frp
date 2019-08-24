@@ -184,6 +184,7 @@ func (ctl *Control) ClosedDoneCh() <-chan struct{} {
 
 
 
+
 // connectServer return a new connection to frps
 func (ctl *Control) connectServer() (conn frpNet.Conn, err error) {
 
@@ -224,6 +225,12 @@ func (ctl *Control) connectServer() (conn frpNet.Conn, err error) {
 	}
 	return
 }
+
+
+
+
+
+
 
 // reader read all messages from frps and send to readCh
 func (ctl *Control) reader() {
@@ -278,7 +285,15 @@ func (ctl *Control) writer() {
 
 
 // msgHandler handles all channel events and do corresponding operations.
+//
+// 本函数主要处理 client 和 server 之间的消息交互。
+//
+// 1. 设置 Ping 发送间隔、Pong 检测间隔
+// 2. 定时发送 Ping 心跳消息
+// 3. 定时检查 Pong 回复消息
+// 4. 接受 server 发来的控制消息，主要是 ReqWorkConn、NewProxyResp、Pong
 func (ctl *Control) msgHandler() {
+
 	defer func() {
 		if err := recover(); err != nil {
 			ctl.Error("panic error: %v", err)
@@ -341,9 +356,17 @@ func (ctl *Control) msgHandler() {
 	}
 }
 
+
+
+
+
 // If controler is notified by closedCh, reader and writer and handler will exit
+//
+//
+// 主函数: 消息读取、消息处理、消息回复、监听关闭信号，完成清理工作。
 func (ctl *Control) worker() {
-	go ctl.msgHandler()  	// 消息处理: 接收 server 发来的消息，发送心跳消息给 server
+
+	go ctl.msgHandler()  	// 消息处理: 1. 接收 server 发来的消息并进行相应处理；2. 发送心跳消息给 server。
 	go ctl.reader() 		// 将 server 发来的消息从 ctl.conn 读到 ctl.readCh
 	go ctl.writer()			// 将 ctl.sendCh 中的消息写入到同 server 的连接 ctl.conn 中
 

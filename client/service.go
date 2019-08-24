@@ -98,6 +98,7 @@ func (svr *Service) Run() error {
 	// first login
 	for {
 
+		//
 		conn, session, err := svr.login()
 
 		if err != nil {
@@ -233,24 +234,33 @@ func (svr *Service) login() (conn frpNet.Conn, session *fmux.Session, err error)
 		}
 	}()
 
+
+	// tcp 多路复用？
 	if g.GlbClientCfg.TcpMux {
+
 		fmuxCfg := fmux.DefaultConfig()
 		fmuxCfg.KeepAliveInterval = 20 * time.Second
 		fmuxCfg.LogOutput = ioutil.Discard
+
 		session, err = fmux.Client(conn, fmuxCfg)
 		if err != nil {
 			return
 		}
+
 		stream, errRet := session.OpenStream()
 		if errRet != nil {
 			session.Close()
 			err = errRet
 			return
 		}
+
 		conn = frpNet.WrapConn(stream)
 	}
 
 	now := time.Now().Unix()
+
+
+
 
 	// 构造 Login 请求
 	loginMsg := &msg.Login{
@@ -276,7 +286,6 @@ func (svr *Service) login() (conn frpNet.Conn, session *fmux.Session, err error)
 		return
 	}
 	conn.SetReadDeadline(time.Time{})
-
 	if loginRespMsg.Error != "" {
 		err = fmt.Errorf("%s", loginRespMsg.Error)
 		log.Error("%s", loginRespMsg.Error)
