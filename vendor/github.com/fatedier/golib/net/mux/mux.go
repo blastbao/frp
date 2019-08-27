@@ -195,10 +195,10 @@ func (mux *Mux) Serve() error {
 		// If it returns any other error then exit immediately.
 
 
-		// 1. 获取真正的网络连接
+		// 1. 获取真正的网络连接 net.Conn
 		conn, err := mux.ln.Accept()
 
-		// 2. 检测是否是临时错误，是则重试，否则返回 err
+		// 2. 若出错，检测是否是临时错误，是则重试，否则返回 err
 		if err, ok := err.(interface {
 			Temporary() bool
 		}); ok && err.Temporary() {
@@ -217,7 +217,7 @@ func (mux *Mux) Serve() error {
 
 //handleConn() 方法也不算复杂，大体可以分为三步：
 //
-// 1. 获取当前状态
+// 1. 获取当前 mux 的核心变量
 // 2. 从 conn 中读取数据，注意：shareConn 和 rd 存在单向关系，如果从 rd 中读取数据的话，数据也会复制一份放到 shareConn 中，反过来就不成立了。
 // 3. 读取到的数据会被遍历，最终选出与 matchFunc 匹配的最高优先级的 listener ，并将 shareConn 放入该 listener 的 c 字段中，
 //    如果没有匹配到则放到 defaultLn 中的 c 字段中，如果 defaultLn 是 nil 的话就不处理，直接关闭 conn 。
@@ -233,12 +233,12 @@ func (mux *Mux) handleConn(conn net.Conn) {
 	// 2. 构造共享的读取连接，从 rd 中读取数据的话，数据也会复制一份放到 shareConn 中
 	sharedConn, rd := gnet.NewSharedConnSize(conn, int(maxNeedBytesNum))
 
-	// 3. 第一次读取，只需要读取能够标识协议类型的 type_header 大小
+	// 3. 第一次读取，只需要读取能够标识协议类型的 type_header 大小，maxNeedBytesNum 大小在创建 Mux 对象时就是确定的
 	data := make([]byte, maxNeedBytesNum)
 
 	conn.SetReadDeadline(time.Now().Add(DefaultTimeout))
 
-	// 4. 从 rd 中读取 type_header 数据
+	// 4. 从 rd 中读取 type_header 数据，以便于后面判断协议类型
 	_, err := io.ReadFull(rd, data)
 	if err != nil {
 		conn.Close()
@@ -265,8 +265,9 @@ func (mux *Mux) handleConn(conn net.Conn) {
 		}
 	}
 
-	// 没有在 lns 中找到匹配的协议 listener，就把 sharedConn 放到 defaultLn 中的 c 字段中。
 	// No match listeners
+	//
+	// 没有在 lns 中找到匹配的协议 listener，就把 sharedConn 放到 defaultLn 中的 c 字段中。
 	if defaultLn != nil {
 		err = errors.PanicToError(func() {
 			defaultLn.c <- sharedConn
@@ -277,8 +278,9 @@ func (mux *Mux) handleConn(conn net.Conn) {
 		return
 	}
 
-	// 如果 defaultLn 是 nil 的话就不处理，直接关闭 conn 。
 	// No listeners for this connection, close it.
+	//
+	// 如果 defaultLn 是 nil 的话就不处理，直接关闭 conn 。
 	conn.Close()
 	return
 }
