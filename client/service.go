@@ -116,8 +116,6 @@ func (svr *Service) Run() error {
 
 		} else {
 			// login success
-
-
 			ctl := NewControl(svr.runId, conn, session, svr.pxyCfgs, svr.visitorCfgs)
 			ctl.Run()
 			svr.ctlMu.Lock()
@@ -258,9 +256,6 @@ func (svr *Service) login() (conn frpNet.Conn, session *fmux.Session, err error)
 	}
 
 	now := time.Now().Unix()
-
-
-
 
 	// 构造 Login 请求
 	loginMsg := &msg.Login{
